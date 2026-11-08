@@ -64,10 +64,12 @@ fn show_window(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_window(app)
+        }))
         .setup(|app| {
             let path = app.path().app_data_dir()?.join("timers.json");
-            app.manage(Engine::open(path, Some(app.handle().clone())));
+            app.manage(Engine::open(path, app.handle().clone()));
             let show = MenuItem::with_id(app, "show", "Show timers", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;

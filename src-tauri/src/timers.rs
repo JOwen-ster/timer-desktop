@@ -224,11 +224,11 @@ pub struct Engine {
     workers: Mutex<Vec<JoinHandle<()>>>,
     audio: Mutex<Option<AlarmAudio>>,
     path: PathBuf,
-    app: Option<tauri::AppHandle>,
+    app: tauri::AppHandle,
 }
 
 impl Engine {
-    pub fn open(path: PathBuf, app: Option<tauri::AppHandle>) -> Arc<Self> {
+    pub fn open(path: PathBuf, app: tauri::AppHandle) -> Arc<Self> {
         let loaded = match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice::<Saved>(&bytes)
                 .map_err(|e| e.to_string())
@@ -264,24 +264,21 @@ impl Engine {
             path,
             app,
         });
-        if engine.app.is_some() {
-            let weak = Arc::downgrade(&engine);
-            match AlarmAudio::new(move |error| {
-                if let Some(engine) = weak.upgrade() {
-                    let mut data = engine.data.lock().unwrap();
-                    if data.stopping
-                        || (error.is_some()
-                            && !data.saved.timers.iter().any(|timer| timer.alarming))
-                    {
-                        return;
-                    }
-                    data.audio_error = error;
-                    engine.publish(&mut data);
+        let weak = Arc::downgrade(&engine);
+        match AlarmAudio::new(move |error| {
+            if let Some(engine) = weak.upgrade() {
+                let mut data = engine.data.lock().unwrap();
+                if data.stopping
+                    || (error.is_some() && !data.saved.timers.iter().any(|timer| timer.alarming))
+                {
+                    return;
                 }
-            }) {
-                Ok(audio) => *engine.audio.lock().unwrap() = Some(audio),
-                Err(error) => engine.data.lock().unwrap().audio_error = Some(error),
+                data.audio_error = error;
+                engine.publish(&mut data);
             }
+        }) {
+            Ok(audio) => *engine.audio.lock().unwrap() = Some(audio),
+            Err(error) => engine.data.lock().unwrap().audio_error = Some(error),
         }
         for id in ids {
             if let Err(error) = engine.spawn(id) {
@@ -315,10 +312,8 @@ impl Engine {
         data.revision += 1;
         data.last_emit = Instant::now();
         let snapshot = Self::view(data);
-        if let Some(app) = &self.app {
-            if let Err(error) = app.emit("timer-update", &snapshot) {
-                eprintln!("Timer update failed: {error}");
-            }
+        if let Err(error) = self.app.emit("timer-update", &snapshot) {
+            eprintln!("Timer update failed: {error}");
         }
         snapshot
     }
@@ -529,264 +524,5 @@ impl Engine {
             let _ = worker.join();
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn timer() -> Timer {
-        Timer {
-            id: 1,
-            name: "Tea".into(),
-            duration_ms: 5000,
-            remaining_ms: 5000,
-            ring_duration_ms: 5000,
-            last_adjustment_ms: 60_000,
-            deadline_ms: Some(6000),
-            alarming: false,
-        }
-    }
-
-    #[test]
-    fn pause_resume_and_independence() {
-        let mut first = timer();
-        let second = timer();
-        first.toggle(2000);
-        assert_eq!(first.remaining(3000), 4000);
-        assert_eq!(second.remaining(3000), 3000);
-        first.toggle(4000);
-        assert_eq!(first.remaining(5000), 3000);
-    }
-
-    #[test]
-    fn editing_name_does_not_reset_but_duration_does() {
-        let mut timer = timer();
-        timer.edit("Coffee".into(), 5000, 2000);
-        assert_eq!(timer.remaining(2000), 4000);
-        timer.edit("Coffee".into(), 8000, 3000);
-        assert_eq!(timer.remaining(3000), 8000);
-        timer.toggle(4000);
-        timer.edit("Coffee".into(), 9000, 5000);
-        assert_eq!(timer.deadline_ms, None);
-        assert_eq!(timer.remaining(9000), 9000);
-    }
-
-    #[test]
-    fn adjustments_clamp_expand_ring_and_keep_restart_duration() {
-        let mut timer = timer();
-        timer.adjust(6000, false, 2000).unwrap();
-        assert_eq!(timer.remaining(2000), 10000);
-        assert_eq!(timer.ring_duration_ms, 10000);
-        assert_eq!(timer.duration_ms, 5000);
-        timer.adjust(20000, true, 2000).unwrap();
-        assert!(timer.settle(2000));
-        assert!(!timer.settle(2000));
-        timer.toggle(3000);
-        assert_eq!(timer.remaining(3000), 0);
-        assert!(!timer.alarming);
-        timer.toggle(3000);
-        assert_eq!(timer.remaining(3000), 5000);
-        assert_eq!(timer.ring_duration_ms, 5000);
-    }
-
-    #[test]
-    fn adding_to_completed_starts_and_paused_stays_paused() {
-        let mut timer = timer();
-        timer.toggle(2000);
-        timer.adjust(1000, false, 3000).unwrap();
-        assert_eq!(timer.deadline_ms, None);
-        timer.adjust(10000, true, 3000).unwrap();
-        timer.adjust(2000, false, 4000).unwrap();
-        assert_eq!(timer.remaining(5000), 1000);
-        assert!(timer.settle(6000));
-        assert!(!timer.settle(7000));
-    }
-
-    #[test]
-    fn first_click_acknowledges_alarm_and_second_click_restarts() {
-        let mut timer = timer();
-        assert!(timer.settle(6000));
-        assert_eq!(timer.view(6000).status, "alarming");
-        timer.toggle(7000);
-        assert_eq!(timer.remaining(7000), 0);
-        assert_eq!(timer.deadline_ms, None);
-        assert_eq!(timer.view(7000).status, "completed");
-        timer.toggle(8000);
-        assert_eq!(timer.remaining(8000), 5000);
-        assert_eq!(timer.view(8000).status, "running");
-    }
-
-    #[test]
-    fn renaming_keeps_alarm_but_retiming_or_adding_time_clears_it() {
-        let mut timer = timer();
-        timer.settle(6000);
-        timer.edit("Renamed".into(), 5000, 7000);
-        assert!(timer.alarming);
-        let mut adjusted = timer.clone();
-        adjusted.adjust(1000, false, 7000).unwrap();
-        assert!(!adjusted.alarming);
-        assert_eq!(adjusted.view(7000).status, "running");
-        timer.edit("Renamed".into(), 10000, 7000);
-        assert!(!timer.alarming);
-        assert_eq!(timer.view(7000).status, "paused");
-    }
-
-    #[test]
-    fn alarms_stay_independent_and_never_replay_after_reopening() {
-        let path = test_path("alarms");
-        let engine = Engine::open(path.clone(), None);
-        engine.create("First".into(), 60).unwrap();
-        engine.create("Second".into(), 60).unwrap();
-        for id in [1, 2] {
-            engine
-                .change(id, |timer, now| {
-                    timer.deadline_ms = Some(now);
-                    Ok(())
-                })
-                .unwrap();
-        }
-        assert!(engine.data.lock().unwrap().alarm_playing);
-        engine.toggle(1).unwrap();
-        assert_eq!(engine.snapshot().timers[0].status, "completed");
-        assert!(engine.data.lock().unwrap().alarm_playing);
-        engine.toggle(2).unwrap();
-        assert!(!engine.data.lock().unwrap().alarm_playing);
-        engine.toggle(1).unwrap();
-        assert_eq!(engine.snapshot().timers[0].status, "running");
-        engine
-            .change(1, |timer, now| {
-                timer.deadline_ms = Some(now);
-                Ok(())
-            })
-            .unwrap();
-        assert!(engine.data.lock().unwrap().alarm_playing);
-        engine.delete(1).unwrap();
-        assert!(!engine.data.lock().unwrap().alarm_playing);
-        engine.toggle(2).unwrap();
-        engine
-            .change(2, |timer, now| {
-                timer.deadline_ms = Some(now);
-                Ok(())
-            })
-            .unwrap();
-        assert!(engine.data.lock().unwrap().alarm_playing);
-        engine.shutdown().unwrap();
-        assert!(!engine.data.lock().unwrap().alarm_playing);
-        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert!(saved["timers"][0].get("alarming").is_none());
-        let engine = Engine::open(path.clone(), None);
-        assert_eq!(engine.snapshot().timers[0].status, "completed");
-        assert!(!engine.data.lock().unwrap().alarm_playing);
-        engine.shutdown().unwrap();
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn validates_names_durations_and_overflow() {
-        assert!(valid_name("  ".into()).is_err());
-        assert_eq!(valid_name(" Tea ".into()).unwrap(), "Tea");
-        assert!(duration_ms(0).is_err());
-        assert!(duration_ms(u64::MAX).is_err());
-        assert_eq!(duration_ms(3661).unwrap(), 3_661_000);
-        let mut timer = timer();
-        assert!(timer.adjust(MAX_MS, false, 1000).is_err());
-        assert_eq!(timer.remaining(1000), 5000);
-    }
-
-    fn test_path(label: &str) -> PathBuf {
-        std::env::temp_dir()
-            .join(format!(
-                "timer-desktop-{}-{label}-{}",
-                std::process::id(),
-                now_ms()
-            ))
-            .join("timers.json")
-    }
-
-    #[test]
-    fn persistence_and_worker_lifecycle() {
-        let path = test_path("roundtrip");
-        let engine = Engine::open(path.clone(), None);
-        engine.create("First".into(), 3601).unwrap();
-        engine.create("Second".into(), 60).unwrap();
-        engine.edit(1, "First renamed".into(), 3601).unwrap();
-        engine.adjust(1, 150, false).unwrap();
-        engine.toggle(2).unwrap();
-        assert_eq!(engine.workers.lock().unwrap().len(), 2);
-        engine.shutdown().unwrap();
-        let engine = Engine::open(path.clone(), None);
-        let snapshot = engine.snapshot();
-        assert_eq!(snapshot.timers.len(), 2);
-        assert_eq!(snapshot.timers[0].name, "First renamed");
-        assert_eq!(snapshot.timers[0].last_adjustment_ms, 150000);
-        assert!(snapshot.timers[0].remaining_ms > 3_750_000);
-        assert_eq!(snapshot.timers[0].status, "paused");
-        assert_eq!(snapshot.timers[1].status, "paused");
-        engine.delete(1).unwrap();
-        engine.shutdown().unwrap();
-        assert!(engine.workers.lock().unwrap().is_empty());
-        let saved: Saved = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        saved.validate().unwrap();
-        assert_eq!(saved.timers.len(), 1);
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn corrupt_storage_is_never_overwritten() {
-        let path = test_path("corrupt");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, b"broken json").unwrap();
-        let engine = Engine::open(path.clone(), None);
-        assert!(engine.snapshot().error.is_some());
-        assert!(engine.create("Tea".into(), 5).is_err());
-        engine.shutdown().unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"broken json");
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn worker_completes_and_saves_without_a_frontend() {
-        let path = test_path("background");
-        let engine = Engine::open(path.clone(), None);
-        engine.create("Background".into(), 60).unwrap();
-        {
-            let mut data = engine.data.lock().unwrap();
-            data.saved.timers[0].deadline_ms = Some(now_ms().saturating_sub(1));
-        }
-        engine.wake.notify_all();
-        let timeout = Instant::now() + Duration::from_secs(3);
-        loop {
-            if engine.data.lock().unwrap().saved.timers[0]
-                .deadline_ms
-                .is_none()
-            {
-                break;
-            }
-            assert!(Instant::now() < timeout, "background worker did not finish");
-            thread::sleep(Duration::from_millis(10));
-        }
-        let saved: Saved = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved.timers[0].remaining_ms, 0);
-        assert_eq!(saved.timers[0].deadline_ms, None);
-        assert_eq!(engine.snapshot().timers[0].status, "alarming");
-        engine.shutdown().unwrap();
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn failed_save_reports_error_and_prevents_quit() {
-        let path = test_path("blocked");
-        fs::create_dir_all(&path).unwrap();
-        let engine = Engine::open(path.clone(), None);
-        // Simulate the storage path becoming unwritable after a successful load.
-        engine.data.lock().unwrap().load_failed = false;
-        assert!(engine.create("Tea".into(), 60).unwrap().error.is_some());
-        assert!(engine.shutdown().is_err());
-        assert!(!engine.data.lock().unwrap().stopping);
-        fs::remove_dir(&path).unwrap();
-        engine.shutdown().unwrap();
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

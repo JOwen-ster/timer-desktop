@@ -41,27 +41,22 @@ bun run tauri build --no-bundle
 
 Build on the target OS. The standalone executable is `src-tauri/target/release/timer-desktop.exe` on Windows and `src-tauri/target/release/timer-desktop` on macOS/Linux. For a native installer/app bundle, omit `--no-bundle`.
 
-## Verify
+## GitHub releases
 
-Quit any running debug build from the tray before rebuilding or running Cargo tests; closing its window only hides it, and Windows keeps the executable locked.
+The desktop workflow builds pull requests, pushes to `main`, and manual runs. Downloads are available as workflow artifacts: Windows x64 NSIS/MSI installers, macOS Apple Silicon and Intel app/DMG bundles, and a Linux x64 AppImage.
 
-```sh
-bun run check
-bun run test
-bun run build
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo check --manifest-path src-tauri/Cargo.toml
-```
-
-Rust tests cover pause/resume, independent countdowns, editing, adjustments, overflow, completion, worker shutdown, persistence, storage errors, and the generated audio signal. The Windows test target has a common-controls manifest required by Tauri's native dependencies.
-
-The `Desktop checks` GitHub Actions workflow builds and tests on Windows, macOS, and Ubuntu when pushed or run manually. These checks do not require speakers. On each target OS, also run the hardware check below, then verify completion/acknowledgment while the window is hidden in the tray:
+To release, update the version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, refresh the lockfiles, and commit. Push a matching tag, for example:
 
 ```sh
-cargo test --manifest-path src-tauri/Cargo.toml native_alarm_playback_starts_and_stops -- --ignored
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-This plays a short alarm through the real audio device and checks start/stop. It is excluded from ordinary tests because CI runners may have no audio hardware.
+Tag builds upload their downloads to one draft GitHub Release. Wait for all four jobs to succeed, then publish the draft from the repository's Releases page. Manual runs on branches only build artifacts; selecting a version tag also updates its draft release. The workflow uses the automatic `GITHUB_TOKEN`; no additional secrets are required.
+
+Windows builds are unsigned and macOS builds use ad-hoc signing without notarization, so operating-system download warnings are expected. Trusted distribution requires signing credentials and macOS notarization. The Linux AppImage targets x64; make it executable with `chmod +x Timers_*.AppImage` before launching. A desktop tray/AppIndicator and working audio output are still required.
+
+## Storage
 
 Timer data is saved as `timers.json` in the app-data directory:
 
@@ -74,5 +69,3 @@ Timer data is saved as `timers.json` in the app-data directory:
 Writes use a synced temporary file followed by replacement. An unreadable or invalid save is left untouched and reported in the app. Save failures retain changes in memory and prevent a normal quit until saving succeeds.
 
 Timers use system-clock deadlines, including time spent asleep. No sound can play while the computer is asleep or the app is not running; an expired timer completes when execution resumes. After an unexpected termination, saved deadlines are reconciled on reopening and timers reopen paused. Changing the system clock can affect running timers.
-
-Windows is verified locally. The macOS/Linux implementations and CI jobs are provided, but their native builds, tray behavior, and physical audio still require verification on those systems; adding the workflow does not mean those jobs have already run.

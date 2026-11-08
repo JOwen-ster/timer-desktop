@@ -1,6 +1,5 @@
 .DS_Store
 node_modules
-.taste-skill/
 /build
 /.svelte-kit
 /package
