@@ -97,7 +97,7 @@
   </div>
   <form onsubmit={save} novalidate>
     <label class="name-label" for="timer-name">Name</label>
-    <input bind:this={nameInput} id="timer-name" class="name-input" bind:value={name} placeholder="e.g. Five minutes" autocomplete="off" disabled={busy} />
+    <input bind:this={nameInput} id="timer-name" class="name-input" bind:value={name} placeholder="5" autocomplete="off" disabled={busy} />
 
     <fieldset disabled={busy}>
       <legend>{editingId === null ? "Duration" : "Configured duration"}</legend>

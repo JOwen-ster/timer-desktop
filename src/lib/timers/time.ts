@@ -7,9 +7,8 @@ export function splitTime(milliseconds: number): TimeFields {
 }
 
 export function parseTime(fields: TimeFields): ParsedTime {
-  const { hours, minutes, seconds } = fields;
-  if (hours === undefined || minutes === undefined || seconds === undefined
-    || [hours, minutes, seconds].some(value => !Number.isSafeInteger(value) || value < 0)
+  const { hours = 0, minutes = 0, seconds = 0 } = fields;
+  if ([hours, minutes, seconds].some(value => !Number.isSafeInteger(value) || value < 0)
     || minutes > 59 || seconds > 59) {
     return { seconds: null, error: "Use whole numbers: hours ≥ 0, minutes and seconds from 0 to 59." };
   }

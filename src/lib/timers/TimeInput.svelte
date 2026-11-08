@@ -5,15 +5,15 @@
 
 <div class="time-input">
   <label for={`${prefix}-hours`}>Hours
-    <input id={`${prefix}-hours`} type="number" min="0" step="1" inputmode="numeric" bind:value={value.hours} {disabled} />
+    <input id={`${prefix}-hours`} type="number" min="0" step="1" inputmode="numeric" bind:value={value.hours} onblur={() => value.hours ??= 0} {disabled} />
   </label>
   <span aria-hidden="true">:</span>
   <label for={`${prefix}-minutes`}>Minutes
-    <input id={`${prefix}-minutes`} type="number" min="0" max="59" step="1" inputmode="numeric" bind:value={value.minutes} {disabled} />
+    <input id={`${prefix}-minutes`} type="number" min="0" max="59" step="1" inputmode="numeric" bind:value={value.minutes} onblur={() => value.minutes ??= 0} {disabled} />
   </label>
   <span aria-hidden="true">:</span>
   <label for={`${prefix}-seconds`}>Seconds
-    <input id={`${prefix}-seconds`} type="number" min="0" max="59" step="1" inputmode="numeric" bind:value={value.seconds} {disabled} />
+    <input id={`${prefix}-seconds`} type="number" min="0" max="59" step="1" inputmode="numeric" bind:value={value.seconds} onblur={() => value.seconds ??= 0} {disabled} />
   </label>
 </div>
 
