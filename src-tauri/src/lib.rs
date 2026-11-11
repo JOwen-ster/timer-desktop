@@ -1,4 +1,5 @@
 mod audio;
+mod mute;
 mod timers;
 
 use std::sync::Arc;

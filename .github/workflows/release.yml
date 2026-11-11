@@ -65,6 +65,9 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Test timer engine
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} --lib
+
       - name: Build installers and upload downloads
         uses: tauri-apps/tauri-action@v1
         env:

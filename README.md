@@ -33,6 +33,8 @@ Audio uses `rodio`/CPAL with WASAPI on Windows, CoreAudio on macOS, and PulseAud
 
 Completion repeats a generated alarm tone through the default audio output until the timer is acknowledged. If several timers finish, the alarm continues until all ringing timers are acknowledged. Adding time, changing the duration, or deleting a ringing timer also ends that timer's alarm; renaming it does not. Quit stops all sound, and reopening never replays old alarms. System/app volume controls whether it is audible; audio-device failures appear in the app. There are no desktop notifications or automatic startup at login.
 
+While a timer rings, Timers temporarily mutes other apps and continues playing its own tone. It restores the audio it muted when the last ringing timer is cleared or you choose **Quit**. On macOS, allow system audio recording when prompted. Timers discards the audio immediately. On Linux, muting requires PulseAudio or PipeWire's PulseAudio service. On Windows, muting covers shared-mode app audio. If Timers is forcibly closed or an audio stream disappears during an alarm, you may need to unmute that app in the Windows or Linux system mixer.
+
 ## Build
 
 ```sh

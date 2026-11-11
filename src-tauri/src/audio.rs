@@ -1,3 +1,4 @@
+use crate::mute::Mute;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source, source::SineWave};
 use std::{
     sync::{Arc, mpsc},
@@ -6,7 +7,12 @@ use std::{
 };
 
 const AUDIO_RECOVERY: &str = "Check your audio output, then acknowledge and restart the timer.";
-type AudioReport = Arc<dyn Fn(Option<String>) + Send + Sync>;
+type AudioReport = Arc<dyn Fn(AudioStatus) + Send + Sync>;
+
+pub(crate) enum AudioStatus {
+    Playback(Option<String>),
+    Muting(Option<String>),
+}
 
 enum AudioCommand {
     Play,
@@ -31,7 +37,9 @@ pub struct AlarmAudio {
 }
 
 impl AlarmAudio {
-    pub fn new(report: impl Fn(Option<String>) + Send + Sync + 'static) -> Result<Self, String> {
+    pub(crate) fn new(
+        report: impl Fn(AudioStatus) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
         let (commands, receiver) = mpsc::channel();
         let report: AudioReport = Arc::new(report);
         // The device stream stays on its owning thread on every platform.
@@ -39,22 +47,55 @@ impl AlarmAudio {
             .name("alarm-audio".into())
             .spawn(move || {
                 let mut output = None;
-                while let Ok(command) = receiver.recv() {
-                    match command {
-                        AudioCommand::Play if output.is_none() => match open_output(report.clone())
-                        {
-                            Ok(stream) => {
-                                output = Some(stream);
-                                report(None);
+                let mut mute: Option<Mute> = None;
+                let mut mute_error = None;
+                let mut report_mute = |error| {
+                    if mute_error != error {
+                        mute_error = error;
+                        report(AudioStatus::Muting(mute_error.clone()));
+                    }
+                };
+                loop {
+                    let command = if let Some(active) = mute.as_mut() {
+                        match receiver.recv_timeout(Duration::from_millis(250)) {
+                            Ok(command) => Some(command),
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                report_mute(active.refresh().err());
+                                continue;
                             }
-                            Err(error) => report(Some(error)),
-                        },
-                        AudioCommand::Play => {}
-                        AudioCommand::Stop => {
-                            output = None;
-                            report(None);
+                            Err(mpsc::RecvTimeoutError::Disconnected) => None,
                         }
-                        AudioCommand::Shutdown => break,
+                    } else {
+                        receiver.recv().ok()
+                    };
+                    match command {
+                        Some(AudioCommand::Play) if output.is_none() => {
+                            report(AudioStatus::Playback(None));
+                            match open_output(report.clone()) {
+                                Ok(stream) => {
+                                    output = Some(stream);
+                                    match Mute::start() {
+                                        Ok(mut active) => {
+                                            report_mute(active.refresh().err());
+                                            mute = Some(active);
+                                        }
+                                        Err(error) => report_mute(Some(error)),
+                                    }
+                                }
+                                Err(error) => report(AudioStatus::Playback(Some(error))),
+                            }
+                        }
+                        Some(AudioCommand::Play) => {}
+                        Some(AudioCommand::Stop) => {
+                            output = None;
+                            report(AudioStatus::Playback(None));
+                            report_mute(restore(mute.take()));
+                        }
+                        Some(AudioCommand::Shutdown) | None => {
+                            drop(output);
+                            restore(mute.take());
+                            break;
+                        }
                     }
                 }
             })
@@ -85,14 +126,24 @@ impl Drop for AlarmAudio {
     }
 }
 
+fn restore(mute: Option<Mute>) -> Option<String> {
+    let error = mute.and_then(|active| active.restore().err()).map(|error| {
+        format!("Could not restore other apps’ audio: {error}. Check the system mixer.")
+    });
+    if let Some(error) = &error {
+        eprintln!("{error}");
+    }
+    error
+}
+
 fn open_output(report: AudioReport) -> Result<MixerDeviceSink, String> {
     let mut stream = DeviceSinkBuilder::from_default_device()
         .and_then(|builder| {
             builder
                 .with_error_callback(move |error| {
-                    report(Some(format!(
+                    report(AudioStatus::Playback(Some(format!(
                         "Alarm audio stopped: {error}. {AUDIO_RECOVERY}"
-                    )));
+                    ))));
                 })
                 .open_sink_or_fallback()
         })

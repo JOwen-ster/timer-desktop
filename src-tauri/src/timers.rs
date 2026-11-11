@@ -1,4 +1,4 @@
-use crate::audio::AlarmAudio;
+use crate::audio::{AlarmAudio, AudioStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -212,10 +212,16 @@ struct Data {
     revision: u64,
     error: Option<String>,
     audio_error: Option<String>,
+    mute_error: Option<String>,
     load_failed: bool,
     stopping: bool,
     alarm_playing: bool,
     last_emit: Instant,
+}
+
+fn alarm_change(playing: &mut bool, timers: &[Timer], stopping: bool) -> Option<bool> {
+    let next = !stopping && timers.iter().any(|timer| timer.alarming);
+    (std::mem::replace(playing, next) != next).then_some(next)
 }
 
 pub struct Engine {
@@ -254,6 +260,7 @@ impl Engine {
                 load_failed: error.is_some(),
                 error,
                 audio_error: None,
+                mute_error: None,
                 stopping: false,
                 alarm_playing: false,
                 last_emit: Instant::now(),
@@ -265,15 +272,17 @@ impl Engine {
             app,
         });
         let weak = Arc::downgrade(&engine);
-        match AlarmAudio::new(move |error| {
+        match AlarmAudio::new(move |status| {
             if let Some(engine) = weak.upgrade() {
                 let mut data = engine.data.lock().unwrap();
-                if data.stopping
-                    || (error.is_some() && !data.saved.timers.iter().any(|timer| timer.alarming))
-                {
+                if data.stopping {
                     return;
                 }
-                data.audio_error = error;
+                match status {
+                    AudioStatus::Playback(Some(_)) if !data.alarm_playing => return,
+                    AudioStatus::Playback(error) => data.audio_error = error,
+                    AudioStatus::Muting(error) => data.mute_error = error,
+                }
                 engine.publish(&mut data);
             }
         }) {
@@ -298,7 +307,12 @@ impl Engine {
                 .iter()
                 .map(|timer| timer.view(now))
                 .collect(),
-            error: data.error.clone().or_else(|| data.audio_error.clone()),
+            error: data
+                .error
+                .as_ref()
+                .or(data.audio_error.as_ref())
+                .or(data.mute_error.as_ref())
+                .cloned(),
         }
     }
 
@@ -319,14 +333,14 @@ impl Engine {
     }
 
     fn sync_alarm(&self, data: &mut Data) {
-        let playing = !data.stopping && data.saved.timers.iter().any(|timer| timer.alarming);
-        if playing != data.alarm_playing {
+        if let Some(playing) =
+            alarm_change(&mut data.alarm_playing, &data.saved.timers, data.stopping)
+        {
             if let Some(audio) = self.audio.lock().unwrap().as_ref() {
                 if let Err(error) = audio.set_playing(playing) {
                     data.audio_error = Some(error);
                 }
             }
-            data.alarm_playing = playing;
         }
     }
 
@@ -524,5 +538,67 @@ impl Engine {
             let _ = worker.join();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mute::sessions::Sessions;
+
+    #[test]
+    fn overlapping_alarms_restore_only_audio_muted_by_timers() {
+        let timer = Timer {
+            id: 1,
+            name: "First".into(),
+            duration_ms: 1000,
+            remaining_ms: 1000,
+            ring_duration_ms: 1000,
+            last_adjustment_ms: 1000,
+            deadline_ms: Some(1000),
+            alarming: false,
+        };
+        let mut timers = [
+            timer.clone(),
+            Timer {
+                id: 2,
+                deadline_ms: Some(2000),
+                ..timer
+            },
+        ];
+        let mut playing = false;
+        assert!(timers[0].settle(1000));
+        assert_eq!(alarm_change(&mut playing, &timers, false), Some(true));
+
+        let mut sessions = Sessions::new();
+        sessions.observe("music", || Ok::<_, ()>(Some(()))).unwrap();
+        sessions
+            .observe("already muted", || Ok::<_, ()>(None))
+            .unwrap();
+        assert_eq!(sessions.observe("failed", || Err(())), Err(()));
+
+        assert!(timers[1].settle(2000));
+        assert_eq!(alarm_change(&mut playing, &timers, false), None);
+        assert_eq!(
+            sessions.observe::<()>("music", || panic!("muted twice")),
+            Ok(())
+        );
+
+        timers[0].toggle(2000);
+        assert_eq!(alarm_change(&mut playing, &timers, false), None);
+        timers[1].toggle(2000);
+        assert_eq!(alarm_change(&mut playing, &timers, false), Some(false));
+        let mut restored = Vec::new();
+        sessions
+            .restore(|id, ()| {
+                restored.push(id);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert_eq!(restored, ["music"]);
+
+        timers[0].alarming = true;
+        assert_eq!(alarm_change(&mut playing, &timers, false), Some(true));
+        assert_eq!(alarm_change(&mut playing, &timers, true), Some(false));
     }
 }
