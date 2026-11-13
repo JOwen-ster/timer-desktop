@@ -246,12 +246,7 @@ impl Engine {
             Err(e) => Err(e.to_string()),
         };
         let error = loaded.as_ref().err().map(|e| format!("Could not load {}: {e} The file has been left untouched. Fix it and restart the app.", path.display()));
-        let mut saved = loaded.unwrap_or_default();
-        let now = now_ms();
-        for timer in &mut saved.timers {
-            timer.remaining_ms = timer.remaining(now);
-            timer.deadline_ms = None;
-        }
+        let saved = loaded.unwrap_or_default();
         let ids: Vec<_> = saved.timers.iter().map(|timer| timer.id).collect();
         let engine = Arc::new(Self {
             data: Mutex::new(Data {
@@ -516,18 +511,9 @@ impl Engine {
         if data.stopping {
             return Ok(());
         }
-        if !data.load_failed {
-            let previous = data.saved.clone();
-            let now = now_ms();
-            for timer in &mut data.saved.timers {
-                timer.remaining_ms = timer.remaining(now);
-                timer.deadline_ms = None;
-            }
-            if let Err(error) = self.save(&mut data) {
-                data.saved = previous;
-                self.publish(&mut data);
-                return Err(error);
-            }
+        if !data.load_failed && let Err(error) = self.save(&mut data) {
+            self.publish(&mut data);
+            return Err(error);
         }
         data.stopping = true;
         self.sync_alarm(&mut data);

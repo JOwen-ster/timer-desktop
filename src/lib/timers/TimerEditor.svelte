@@ -14,7 +14,6 @@
   let adjustment = $state<TimeFields>(splitTime(0));
   let modalError = $state("");
   let notice = $state("");
-  let confirmDelete = $state(false);
   let opener: HTMLElement | null = null;
   const snapshot = $derived($session.snapshot);
   const busy = $derived($session.busy);
@@ -30,7 +29,6 @@
     adjustment = splitTime(timer?.lastAdjustmentMs ?? 0);
     modalError = "";
     notice = "";
-    confirmDelete = false;
     dialog.showModal();
     await tick();
     nameInput.focus();
@@ -64,13 +62,13 @@
 
   async function save(event: SubmitEvent) {
     event.preventDefault();
-    if (!name.trim()) { modalError = "Give the timer a name."; return; }
     const parsed = parseTime(duration);
     if (parsed.error !== null) { modalError = parsed.error; return; }
     const seconds = parsed.seconds;
+    const timerName = name.trim() || formatTime(seconds * 1000, true);
     const success = await perform(() => editingId === null
-      ? session.execute("create_timer", { name, seconds })
-      : session.execute("edit_timer", { id: editingId, name, seconds }));
+      ? session.execute("create_timer", { name: timerName, seconds })
+      : session.execute("edit_timer", { id: editingId, name: timerName, seconds }));
     if (success) dialog.close();
   }
 
@@ -85,9 +83,6 @@
     }
   }
 
-  async function remove() {
-    if (editingId !== null && await perform(() => session.execute("delete_timer", { id: editingId! }))) dialog.close();
-  }
 </script>
 
 <dialog bind:this={dialog} onkeydown={trapFocus} onclose={afterClose} oncancel={event => { if (busy) event.preventDefault(); }} aria-labelledby="modal-title">
@@ -96,8 +91,8 @@
     <button class="close-button" type="button" aria-label="Close dialog" disabled={busy} onclick={() => dialog.close()}>×</button>
   </div>
   <form onsubmit={save} novalidate>
-    <label class="name-label" for="timer-name">Name</label>
-    <input bind:this={nameInput} id="timer-name" class="name-input" bind:value={name} placeholder="5" autocomplete="off" disabled={busy} />
+    <label class="name-label" for="timer-name">Name (optional)</label>
+    <input bind:this={nameInput} id="timer-name" class="name-input" bind:value={name} placeholder="Uses the timer duration" autocomplete="off" disabled={busy} />
 
     <fieldset disabled={busy}>
       <legend>{editingId === null ? "Duration" : "Configured duration"}</legend>
@@ -123,19 +118,6 @@
       <button class="primary" type="submit" disabled={busy}>{busy ? "Saving…" : editingId === null ? "Create & start" : "Save changes"}</button>
     </div>
   </form>
-  {#if editingId !== null}
-    <div class="delete-section">
-      {#if confirmDelete}
-        <p>Delete this timer permanently?</p>
-        <div class="delete-actions">
-          <button type="button" class="secondary" disabled={busy} onclick={() => confirmDelete = false}>Keep timer</button>
-          <button type="button" class="danger" disabled={busy} onclick={remove}>Delete timer</button>
-        </div>
-      {:else}
-        <button type="button" class="delete-link" disabled={busy} onclick={() => confirmDelete = true}>Delete timer</button>
-      {/if}
-    </div>
-  {/if}
 </dialog>
 
 <style>
@@ -160,16 +142,11 @@
   .notice { color: #145d79; font-size: 12px; margin: 10px 0 0; min-height: 18px; }
   .modal-error { color: #9a342a; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 28px; }
-  .primary, .secondary, .danger { border: 1px solid #343638; border-radius: 999px; min-height: 42px; padding: 9px 20px; font-size: 14px; font-weight: 600; }
+  .primary, .secondary { border: 1px solid #343638; border-radius: 999px; min-height: 42px; padding: 9px 20px; font-size: 14px; font-weight: 600; }
   .primary { color: #fff; background: #292b2d; }
   .primary:hover { background: #45494b; }
   .secondary { background: transparent; }
   .secondary:hover { background: #e4e4e4; }
-  .delete-section { border-top: 1px solid #d2d4d5; padding-top: 18px; margin-top: 24px; }
-  .delete-link { color: #963c33; background: transparent; border: 0; padding: 8px 0; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
-  .delete-section p { margin: 0 0 12px; font-size: 14px; }
-  .delete-actions { display: flex; justify-content: space-between; gap: 10px; }
-  .danger { color: #fff; background: #963c33; border-color: #963c33; }
   @media (max-width: 620px) {
     dialog { padding: 22px; }
     .adjust-buttons { gap: 8px; }

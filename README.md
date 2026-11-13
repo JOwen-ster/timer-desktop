@@ -28,10 +28,10 @@ Audio uses `rodio`/CPAL with WASAPI on Windows, CoreAudio on macOS, and PulseAud
 - Click a timer's circle or card body to pause/resume. When it finishes, the first click stops and acknowledges the alarm, leaving it at zero. The next click runs its configured duration again.
 - Click its name to edit. Changing the configured duration replaces the remaining time; changing only the name preserves the countdown. Saving preserves running/paused state.
 - **Add time** and **Remove time** apply immediately, even if you later cancel the modal. Each timer remembers the last adjustment for its two quick buttons; the initial amount is one minute.
-- **Delete timer** requires confirmation inside the edit modal.
-- Closing the window hides it in the system tray. Click the tray icon or choose **Show timers** to return. **Quit** saves remaining times and stops the workers; reopening restores timers paused.
+- To delete a timer, click the red trash icon on its card and confirm with the green checkmark. Click the red X to cancel.
+- Closing the window hides it in the system tray. Click the tray icon or choose **Show timers** to return. **Quit** saves timer state and stops the workers. Running timers resume automatically on reopening. Manually paused timers stay paused.
 
-Completion repeats a generated alarm tone through the default audio output until the timer is acknowledged. If several timers finish, the alarm continues until all ringing timers are acknowledged. Adding time, changing the duration, or deleting a ringing timer also ends that timer's alarm; renaming it does not. Quit stops all sound, and reopening never replays old alarms. System/app volume controls whether it is audible; audio-device failures appear in the app. There are no desktop notifications or automatic startup at login.
+Completion repeats a generated alarm tone through the default audio output until the timer is acknowledged. If several timers finish, the alarm continues until all ringing timers are acknowledged. Adding time, changing the duration, or deleting a ringing timer also ends that timer's alarm; renaming it does not. Quit clears alarms that are already ringing. System/app volume controls whether it is audible; audio-device failures appear in the app. There are no desktop notifications or automatic startup at login.
 
 While a timer rings, Timers temporarily mutes other apps and continues playing its own tone. It restores the audio it muted when the last ringing timer is cleared or you choose **Quit**. On macOS, allow system audio recording when prompted. Timers discards the audio immediately. On Linux, muting requires PulseAudio or PipeWire's PulseAudio service. On Windows, muting covers shared-mode app audio. If Timers is forcibly closed or an audio stream disappears during an alarm, you may need to unmute that app in the Windows or Linux system mixer.
 
@@ -70,4 +70,4 @@ Timer data is saved as `timers.json` in the app-data directory:
 
 Writes use a synced temporary file followed by replacement. An unreadable or invalid save is left untouched and reported in the app. Save failures retain changes in memory and prevent a normal quit until saving succeeds.
 
-Timers use system-clock deadlines, including time spent asleep. No sound can play while the computer is asleep or the app is not running; an expired timer completes when execution resumes. After an unexpected termination, saved deadlines are reconciled on reopening and timers reopen paused. Changing the system clock can affect running timers.
+Timers use system-clock deadlines, so time spent asleep or with the app closed counts toward running timers. If a saved running timer expires while the app is closed, it alarms when you reopen the app. Changing the system clock can affect running timers.

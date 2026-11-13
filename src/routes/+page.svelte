@@ -30,8 +30,8 @@
 
   async function command<K extends TimerMutation>(name: K, args: TimerRequests[K]) {
     actionError = "";
-    try { await session.execute(name, args); }
-    catch (cause) { actionError = String(cause); }
+    try { return await session.execute(name, args); }
+    catch (cause) { actionError = String(cause); return false; }
   }
 
   async function retry() {
@@ -66,6 +66,7 @@
     {#each snapshot.timers as timer (timer.id)}
       <TimerCard {timer} disabled={!$session.ready || $session.busy}
         onEdit={timer => editor.open(timer)}
+        onDelete={async id => { if (await command("delete_timer", { id })) addButton?.focus(); }}
         onToggle={id => command("toggle_timer", { id })}
         onAdjust={(id, seconds, subtract) => command("adjust_timer", { id, seconds, subtract })} />
     {/each}
