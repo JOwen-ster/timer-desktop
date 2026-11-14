@@ -1,18 +1,16 @@
 name: Desktop builds and releases
 
 on:
-  pull_request:
   push:
     branches: [main]
-    tags: ['v[0-9]*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -38,15 +36,14 @@ jobs:
             target: x86_64-apple-darwin
             bundles: app,dmg
           - name: Linux x64 AppImage
-            # Build against an older glibc for broader distribution compatibility.
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          persist-credentials: true # Required so we can push the generated tag back to repo
 
       - uses: oven-sh/setup-bun@v2.2.0
         with:
@@ -55,6 +52,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # Automatically create and push a new tag based on package.json version if one doesn't exist
+      - name: Create and push automated tag
+        if: runner.os == 'Windows' # Run this step on only one job to avoid race conditions
+        run: |
+          # Read version from package.json (adjust path if needed)
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tagName = "v$version"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if (-not (git rev-parse $tagName -ErrorAction SilentlyContinue)) {
+            git tag $tagName
+            git push origin $tagName
+            Write-Host "Created and pushed new tag: $tagName"
+          } else {
+            Write-Host "Tag $tagName already exists."
+          }
 
       - name: Install Linux desktop and audio dependencies
         if: runner.os == 'Linux'
@@ -77,10 +93,9 @@ jobs:
         with:
           tauriScript: bun run tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Timers {0}', github.ref_name) || '' }}
-          releaseBody: Download the installer for your platform below. Windows builds are unsigned; macOS builds use ad-hoc signing and are not notarized. macOS requires version 14.2 or later.
-          releaseDraft: true
+          releaseName: 'Timers v__VERSION__' # Tauri action automatically substitutes version
+          releaseBody: 'Download the installer for your platform below. Windows builds are unsigned; macOS builds use ad-hoc signing.'
+          releaseDraft: false # Makes the release public immediately
           prerelease: false
           uploadUpdaterJson: false
           uploadWorkflowArtifacts: true
