@@ -1,8 +1,51 @@
-steps:
+name: Desktop builds and releases
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS Intel
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: Linux x64 AppImage
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage
+
+    steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: true
-          fetch-depth: 0 # Fetches all history and tags so git knows what exists
+          persist-credentials: true # Required so GitHub Actions can push the new tag back
+          fetch-depth: 0            # Fetches full git history so tag checks work properly
 
       - uses: oven-sh/setup-bun@v2.2.0
         with:
@@ -12,9 +55,9 @@ steps:
         with:
           targets: ${{ matrix.target }}
 
-      # Automatically create and push a new tag based on package.json version if one doesn't exist
+      # Automatically reads your package.json version and creates/pushes the tag if missing
       - name: Create and push automated tag
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' # Runs on one matrix job to prevent race conditions
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $tagName = "v$version"
@@ -22,12 +65,40 @@ steps:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Check if tag exists locally or remotely safely
           $tagExists = git tag --list $tagName
           if (-not $tagExists) {
-              Write-Host "Creating new tag: $tagName"
+              Write-Host "Creating and pushing new tag: $tagName"
               git tag $tagName
               git push origin $tagName
           } else {
               Write-Host "Tag $tagName already exists. Skipping tag creation."
           }
+
+      - name: Install Linux desktop and audio dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libpulse-dev patchelf libfuse2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test timer engine
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} --lib
+
+      - name: Build installers and upload downloads
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          tauriScript: bun run tauri
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Timers {0}', github.ref_name) || '' }}
+          releaseBody: Download the installer for your platform below. Windows builds are unsigned; macOS builds use ad-hoc signing and are not notarized. macOS requires version 14.2 or later.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: false
+          uploadWorkflowArtifacts: true
