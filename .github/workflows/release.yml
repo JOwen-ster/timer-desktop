@@ -14,8 +14,38 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  prepare:
+    name: Determine version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+            release=true
+          else
+            tag="v$(jq -r .version package.json)"
+            # Only release if this version doesn't already have a release
+            if gh release view "$tag" >/dev/null 2>&1; then
+              release=false
+            else
+              release=true
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "Tag: $tag, release: $release"
+
   build:
     name: ${{ matrix.name }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
@@ -43,9 +73,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: true # Required so GitHub Actions can push the new tag back
-          fetch-depth: 0            # Fetches full git history so tag checks work properly
 
       - uses: oven-sh/setup-bun@v2.2.0
         with:
@@ -54,25 +81,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      # Automatically reads your package.json version and creates/pushes the tag if missing
-      - name: Create and push automated tag
-        if: runner.os == 'Windows' # Runs on one matrix job to prevent race conditions
-        run: |
-          $version = (Get-Content package.json | ConvertFrom-Json).version
-          $tagName = "v$version"
-          
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          $tagExists = git tag --list $tagName
-          if (-not $tagExists) {
-              Write-Host "Creating and pushing new tag: $tagName"
-              git tag $tagName
-              git push origin $tagName
-          } else {
-              Write-Host "Tag $tagName already exists. Skipping tag creation."
-          }
 
       - name: Install Linux desktop and audio dependencies
         if: runner.os == 'Linux'
@@ -95,8 +103,9 @@ jobs:
         with:
           tauriScript: bun run tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Timers {0}', github.ref_name) || '' }}
+          tagName: ${{ needs.prepare.outputs.release == 'true' && needs.prepare.outputs.tag || '' }}
+          releaseName: ${{ needs.prepare.outputs.release == 'true' && format('Timers {0}', needs.prepare.outputs.tag) || '' }}
+          commitish: ${{ github.sha }}
           releaseBody: Download the installer for your platform below. Windows builds are unsigned; macOS builds use ad-hoc signing and are not notarized. macOS requires version 14.2 or later.
           releaseDraft: false
           prerelease: false
