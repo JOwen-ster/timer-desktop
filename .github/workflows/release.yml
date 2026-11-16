@@ -43,6 +43,19 @@ jobs:
           echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "Tag: $tag, release: $release"
 
+      - name: Ensure release exists
+        if: steps.v.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.v.outputs.tag }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --target "$GITHUB_SHA" \
+              --title "Timers $tag" \
+              --notes "Download the build for your platform below. No installers: Windows is a standalone .exe, macOS is a zipped .app (unzip and run), Linux is an AppImage. Windows builds are unsigned; macOS builds use ad-hoc signing and are not notarized, so right-click > Open on first launch. macOS requires version 14.2 or later."
+          fi
+
   build:
     name: ${{ matrix.name }}
     needs: prepare
@@ -57,15 +70,14 @@ jobs:
           - name: Windows x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            bundles: nsis,msi
           - name: macOS Apple Silicon
             os: macos-latest
             target: aarch64-apple-darwin
-            bundles: app,dmg
+            arch: arm64
           - name: macOS Intel
             os: macos-latest
             target: x86_64-apple-darwin
-            bundles: app,dmg
+            arch: x64
           - name: Linux x64 AppImage
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -94,19 +106,78 @@ jobs:
       - name: Test timer engine
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} --lib
 
-      - name: Build installers and upload downloads
+      - name: Build standalone exe (Windows)
+        if: runner.os == 'Windows'
+        run: bun run tauri build --target ${{ matrix.target }} --no-bundle
+
+      - name: Collect and upload exe (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ needs.prepare.outputs.tag }}"
+          dir="src-tauri/target/${{ matrix.target }}/release"
+          exe=$(ls "$dir"/*.exe | head -n 1)
+          echo "Found exe: $exe"
+          mkdir -p dist
+          out="dist/Timers-${tag}-windows-x64.exe"
+          cp "$exe" "$out"
+          echo "EXE_PATH=$out" >> "$GITHUB_ENV"
+          if [[ "${{ needs.prepare.outputs.release }}" == "true" ]]; then
+            gh release upload "$tag" "$out" --clobber
+          fi
+
+      - name: Upload exe as workflow artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-exe
+          path: ${{ env.EXE_PATH }}
+
+      - name: Build .app (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: bun run tauri build --target ${{ matrix.target }} --bundles app
+
+      - name: Zip and upload .app (macOS)
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ needs.prepare.outputs.tag }}"
+          dir="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          app=$(ls -d "$dir"/*.app | head -n 1)
+          echo "Found app: $app"
+          mkdir -p dist
+          out="dist/Timers-${tag}-macos-${{ matrix.arch }}.zip"
+          # ditto preserves the bundle structure, symlinks and signature; plain `zip` can break them
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$out"
+          echo "ZIP_PATH=$out" >> "$GITHUB_ENV"
+          if [[ "${{ needs.prepare.outputs.release }}" == "true" ]]; then
+            gh release upload "$tag" "$out" --clobber
+          fi
+
+      - name: Upload .app zip as workflow artifact (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-app
+          path: ${{ env.ZIP_PATH }}
+
+      - name: Build AppImage and upload downloads
+        if: runner.os == 'Linux'
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPIMAGE_EXTRACT_AND_RUN: '1'
-          APPLE_SIGNING_IDENTITY: '-'
         with:
           tauriScript: bun run tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
           tagName: ${{ needs.prepare.outputs.release == 'true' && needs.prepare.outputs.tag || '' }}
           releaseName: ${{ needs.prepare.outputs.release == 'true' && format('Timers {0}', needs.prepare.outputs.tag) || '' }}
           commitish: ${{ github.sha }}
-          releaseBody: Download the installer for your platform below. Windows builds are unsigned; macOS builds use ad-hoc signing and are not notarized. macOS requires version 14.2 or later.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false
