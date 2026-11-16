@@ -28,6 +28,13 @@ fn duration_ms(seconds: u64) -> Result<u64, String> {
         .ok_or_else(|| "Enter a positive duration within the supported range.".into())
 }
 
+fn adjustment_ms(seconds: u64) -> Result<u64, String> {
+    seconds
+        .checked_mul(1000)
+        .filter(|ms| (1..=MAX_MS).contains(ms))
+        .ok_or_else(|| "Enter a positive quick adjustment within the supported range.".into())
+}
+
 fn valid_name(name: String) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -412,9 +419,15 @@ impl Engine {
         Ok(())
     }
 
-    pub fn create(self: &Arc<Self>, name: String, seconds: u64) -> Result<Snapshot, String> {
+    pub fn create(
+        self: &Arc<Self>,
+        name: String,
+        seconds: u64,
+        adjustment_seconds: u64,
+    ) -> Result<Snapshot, String> {
         let name = valid_name(name)?;
         let duration = duration_ms(seconds)?;
+        let last_adjustment_ms = adjustment_ms(adjustment_seconds)?;
         let mut data = self.data.lock().unwrap();
         Self::writable(&data)?;
         let id = data.saved.next_id;
@@ -427,7 +440,7 @@ impl Engine {
             duration_ms: duration,
             remaining_ms: duration,
             ring_duration_ms: duration,
-            last_adjustment_ms: 60_000,
+            last_adjustment_ms,
             deadline_ms: Some(now_ms() + duration),
             alarming: false,
         });
@@ -468,11 +481,19 @@ impl Engine {
         Ok(snapshot)
     }
 
-    pub fn edit(&self, id: u64, name: String, seconds: u64) -> Result<Snapshot, String> {
+    pub fn edit(
+        &self,
+        id: u64,
+        name: String,
+        seconds: u64,
+        adjustment_seconds: u64,
+    ) -> Result<Snapshot, String> {
         let name = valid_name(name)?;
         let duration = duration_ms(seconds)?;
+        let last_adjustment_ms = adjustment_ms(adjustment_seconds)?;
         self.change(id, |timer, now| {
             timer.edit(name, duration, now);
+            timer.last_adjustment_ms = last_adjustment_ms;
             Ok(())
         })
     }
@@ -485,7 +506,7 @@ impl Engine {
     }
 
     pub fn adjust(&self, id: u64, seconds: u64, subtract: bool) -> Result<Snapshot, String> {
-        let amount = duration_ms(seconds)?;
+        let amount = adjustment_ms(seconds)?;
         self.change(id, |timer, now| timer.adjust(amount, subtract, now))
     }
 
@@ -531,6 +552,15 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::mute::sessions::Sessions;
+
+    #[test]
+    fn quick_adjustment_must_fit_in_a_saved_timer() {
+        assert_eq!(adjustment_ms(45), Ok(45_000));
+        assert!(adjustment_ms(0).is_err());
+        let max_seconds = MAX_MS / 1000;
+        assert!(adjustment_ms(max_seconds).is_ok());
+        assert!(adjustment_ms(max_seconds + 1).is_err());
+    }
 
     #[test]
     fn overlapping_alarms_restore_only_audio_muted_by_timers() {

@@ -3,8 +3,8 @@ import type { Snapshot } from "./types";
 
 export type TimerRequests = {
   list_timers: Record<string, never>;
-  create_timer: { name: string; seconds: number };
-  edit_timer: { id: number; name: string; seconds: number };
+  create_timer: { name: string; seconds: number; adjustmentSeconds: number };
+  edit_timer: { id: number; name: string; seconds: number; adjustmentSeconds: number };
   toggle_timer: { id: number };
   adjust_timer: { id: number; seconds: number; subtract: boolean };
   delete_timer: { id: number };

@@ -20,8 +20,9 @@ fn create_timer(
     engine: State<'_, Arc<Engine>>,
     name: String,
     seconds: u64,
+    adjustment_seconds: u64,
 ) -> Result<Snapshot, String> {
-    engine.create(name, seconds)
+    engine.create(name, seconds, adjustment_seconds)
 }
 
 #[tauri::command]
@@ -30,8 +31,9 @@ fn edit_timer(
     id: u64,
     name: String,
     seconds: u64,
+    adjustment_seconds: u64,
 ) -> Result<Snapshot, String> {
-    engine.edit(id, name, seconds)
+    engine.edit(id, name, seconds, adjustment_seconds)
 }
 
 #[tauri::command]

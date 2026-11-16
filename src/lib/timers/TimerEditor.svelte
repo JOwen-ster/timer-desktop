@@ -26,7 +26,7 @@
     editingId = timer?.id ?? null;
     name = timer?.name ?? "";
     duration = splitTime(timer?.durationMs ?? 300_000);
-    adjustment = splitTime(timer?.lastAdjustmentMs ?? 0);
+    adjustment = splitTime(timer?.lastAdjustmentMs ?? 60_000);
     modalError = "";
     notice = "";
     dialog.showModal();
@@ -64,20 +64,21 @@
     event.preventDefault();
     const parsed = parseTime(duration);
     if (parsed.error !== null) { modalError = parsed.error; return; }
+    if (parsedAdjustment.error !== null) { modalError = `Quick adjustment. ${parsedAdjustment.error}`; return; }
     const seconds = parsed.seconds;
+    const adjustmentSeconds = parsedAdjustment.seconds;
     const timerName = name.trim() || formatTime(seconds * 1000, true);
     const success = await perform(() => editingId === null
-      ? session.execute("create_timer", { name: timerName, seconds })
-      : session.execute("edit_timer", { id: editingId, name: timerName, seconds }));
+      ? session.execute("create_timer", { name: timerName, seconds, adjustmentSeconds })
+      : session.execute("edit_timer", { id: editingId, name: timerName, seconds, adjustmentSeconds }));
     if (success) dialog.close();
   }
 
   async function adjust(subtract: boolean) {
     if (editingId === null) return;
-    const parsed = parseTime(adjustment);
-    if (parsed.error !== null) { modalError = parsed.error; return; }
+    if (parsedAdjustment.error !== null) { modalError = parsedAdjustment.error; return; }
     const id = editingId;
-    const seconds = parsed.seconds;
+    const seconds = parsedAdjustment.seconds;
     if (await perform(() => session.execute("adjust_timer", { id, seconds, subtract }))) {
       notice = `${subtract ? "Removed" : "Added"} ${formatTime(seconds * 1000, true)}. Quick buttons updated.`;
     }
@@ -100,17 +101,21 @@
     </fieldset>
     {#if editingId !== null}
       <p class="field-note">Changing the duration replaces the countdown. Renaming keeps it running as it is.</p>
-      <section class="adjust-section" aria-labelledby="adjust-title">
-        <div class="section-heading"><h3 id="adjust-title">Adjust remaining time</h3><span>{selected ? formatTime(selected.remainingMs) : ""} left</span></div>
-        <TimeInput bind:value={adjustment} prefix="adjustment" disabled={busy} />
+    {/if}
+    <section class="adjust-section" aria-labelledby="adjust-title">
+      <div class="section-heading"><h3 id="adjust-title">Quick adjustment</h3>{#if selected}<span>{formatTime(selected.remainingMs)} left</span>{/if}</div>
+      <TimeInput bind:value={adjustment} prefix="adjustment" disabled={busy} />
+      {#if editingId !== null}
         <div class="adjust-buttons">
           <button type="button" class="pill" disabled={busy} onclick={() => adjust(true)}>− Remove {adjustmentLabel}</button>
           <button type="button" class="pill" disabled={busy} onclick={() => adjust(false)}>+ Add {adjustmentLabel}</button>
         </div>
-        <p class="field-note">Applied immediately. Also sets this timer’s quick buttons.</p>
+        <p class="field-note">Add and Remove apply immediately and save the amount. To update only the quick buttons, choose Save changes.</p>
         <p class="notice" role="status">{notice}</p>
-      </section>
-    {/if}
+      {:else}
+        <p class="field-note">Sets how much time the quick buttons add or remove.</p>
+      {/if}
+    </section>
 
     {#if modalError || snapshot.error}<p class="modal-error" role="alert">{modalError || snapshot.error}</p>{/if}
     <div class="modal-actions">

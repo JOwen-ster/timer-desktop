@@ -27,7 +27,7 @@ Audio uses `rodio`/CPAL with WASAPI on Windows, CoreAudio on macOS, and PulseAud
 - Click the first **+** card to create a timer. Enter a name and hours, minutes, and seconds; **Create & start** begins immediately.
 - Click a timer's circle or card body to pause/resume. When it finishes, the first click stops and acknowledges the alarm, leaving it at zero. The next click runs its configured duration again.
 - Click its name to edit. Changing the configured duration replaces the remaining time; changing only the name preserves the countdown. Saving preserves running/paused state.
-- **Add time** and **Remove time** apply immediately, even if you later cancel the modal. Each timer remembers the last adjustment for its two quick buttons; the initial amount is one minute.
+- Set the amount for the **Add** and **Remove** quick buttons when creating or editing a timer. The default is one minute. In the edit dialog, **Add** and **Remove** also apply immediately and save the amount, even if you later cancel the dialog.
 - To delete a timer, click the red trash icon on its card and confirm with the green checkmark. Click the red X to cancel.
 - Closing the window hides it in the system tray. Click the tray icon or choose **Show timers** to return. **Quit** saves timer state and stops the workers. Running timers resume automatically on reopening. Manually paused timers stay paused.
 
