@@ -1,5 +1,7 @@
 mod audio;
 mod mute;
+#[cfg(target_os = "windows")]
+mod notifications;
 mod timers;
 
 use std::sync::Arc;
@@ -71,6 +73,10 @@ pub fn run() {
             show_window(app)
         }))
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            if let Err(error) = notifications::initialize() {
+                eprintln!("Could not initialize Windows notifications: {error}");
+            }
             let path = app.path().app_data_dir()?.join("timers.json");
             app.manage(Engine::open(path, app.handle().clone()));
             let show = MenuItem::with_id(app, "show", "Show timers", true, None::<&str>)?;

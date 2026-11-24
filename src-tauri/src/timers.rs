@@ -398,10 +398,16 @@ impl Engine {
                     };
                     let finished = timer.settle(now_ms());
                     let running = timer.deadline_ms.is_some();
+                    #[cfg(target_os = "windows")]
+                    let finished_name = finished.then(|| timer.name.clone());
                     if finished {
                         let _ = engine.save(&mut data);
                         engine.sync_alarm(&mut data);
                         engine.publish(&mut data);
+                        #[cfg(target_os = "windows")]
+                        if let Some(name) = finished_name {
+                            crate::notifications::show(engine.app.clone(), id, name);
+                        }
                     } else if running && data.last_emit.elapsed() >= TICK {
                         engine.publish(&mut data);
                     }
@@ -474,6 +480,10 @@ impl Engine {
         action(&mut updated, now)?;
         updated.settle(now);
         *timer = updated;
+        #[cfg(target_os = "windows")]
+        if !timer.alarming {
+            crate::notifications::dismiss(id);
+        }
         let _ = self.save(&mut data);
         self.sync_alarm(&mut data);
         let snapshot = self.publish(&mut data);
@@ -505,6 +515,29 @@ impl Engine {
         })
     }
 
+    pub fn acknowledge_alarm(&self, id: u64) -> Result<Option<Snapshot>, String> {
+        let mut data = self.data.lock().unwrap();
+        Self::writable(&data)?;
+        let Some(timer) = data.saved.timers.iter_mut().find(|timer| timer.id == id) else {
+            return Ok(None);
+        };
+        let now = now_ms();
+        let mut updated = timer.clone();
+        updated.settle(now);
+        if !updated.alarming {
+            return Ok(None);
+        }
+        updated.toggle(now);
+        *timer = updated;
+        #[cfg(target_os = "windows")]
+        crate::notifications::dismiss(id);
+        let _ = self.save(&mut data);
+        self.sync_alarm(&mut data);
+        let snapshot = self.publish(&mut data);
+        self.wake.notify_all();
+        Ok(Some(snapshot))
+    }
+
     pub fn adjust(&self, id: u64, seconds: u64, subtract: bool) -> Result<Snapshot, String> {
         let amount = adjustment_ms(seconds)?;
         self.change(id, |timer, now| timer.adjust(amount, subtract, now))
@@ -520,6 +553,8 @@ impl Engine {
             .position(|timer| timer.id == id)
             .ok_or("Timer no longer exists.")?;
         data.saved.timers.remove(index);
+        #[cfg(target_os = "windows")]
+        crate::notifications::dismiss(id);
         let _ = self.save(&mut data);
         self.sync_alarm(&mut data);
         let snapshot = self.publish(&mut data);
@@ -535,6 +570,10 @@ impl Engine {
         if !data.load_failed && let Err(error) = self.save(&mut data) {
             self.publish(&mut data);
             return Err(error);
+        }
+        #[cfg(target_os = "windows")]
+        for timer in data.saved.timers.iter().filter(|timer| timer.alarming) {
+            crate::notifications::dismiss(timer.id);
         }
         data.stopping = true;
         self.sync_alarm(&mut data);
