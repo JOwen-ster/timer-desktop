@@ -17,9 +17,10 @@ use windows::{
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-                CoUninitialize, IPersistFile, STGM_READ,
+                CoTaskMemAlloc, CoUninitialize, IPersistFile, STGM_READWRITE,
                 StructuredStorage::{
                     PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+                    PropVariantClear,
                 },
             },
             Variant::{VARENUM, VT_LPWSTR},
@@ -74,7 +75,7 @@ unsafe fn register_shortcut_com() -> windows::core::Result<()> {
         unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)? };
     let persist_file: IPersistFile = shell_link.cast()?;
     if shortcut_path.exists() {
-        unsafe { persist_file.Load(PCWSTR(link_path.as_ptr()), STGM_READ)? };
+        unsafe { persist_file.Load(PCWSTR(link_path.as_ptr()), STGM_READWRITE)? };
     } else {
         unsafe { shell_link.SetPath(PCWSTR(exe.as_ptr()))? };
         unsafe { shell_link.SetIconLocation(PCWSTR(exe.as_ptr()), 0)? };
@@ -82,6 +83,16 @@ unsafe fn register_shortcut_com() -> windows::core::Result<()> {
 
     let property_store: IPropertyStore = shell_link.cast()?;
     let app_id_wide = wide(std::ffi::OsStr::new(APP_ID));
+    let app_id_buffer =
+        unsafe { CoTaskMemAlloc(app_id_wide.len() * std::mem::size_of::<u16>()) }.cast::<u16>();
+    if app_id_buffer.is_null() {
+        return Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+            0x8007000E_u32 as i32,
+        )));
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(app_id_wide.as_ptr(), app_id_buffer, app_id_wide.len())
+    };
     let mut app_id_value = PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
@@ -90,7 +101,7 @@ unsafe fn register_shortcut_com() -> windows::core::Result<()> {
                 wReserved2: 0,
                 wReserved3: 0,
                 Anonymous: PROPVARIANT_0_0_0 {
-                    pwszVal: PWSTR(app_id_wide.as_ptr() as *mut _),
+                    pwszVal: PWSTR(app_id_buffer),
                 },
             }),
         },
@@ -99,11 +110,11 @@ unsafe fn register_shortcut_com() -> windows::core::Result<()> {
         fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
         pid: 5,
     };
-    unsafe {
-        property_store.SetValue(&app_user_model_id, &app_id_value)?;
-        property_store.Commit()?;
-    }
-    app_id_value.Anonymous = PROPVARIANT_0::default();
+    let set_result = unsafe { property_store.SetValue(&app_user_model_id, &app_id_value) };
+    let clear_result = unsafe { PropVariantClear(&mut app_id_value) };
+    set_result?;
+    clear_result?;
+    unsafe { property_store.Commit()? };
 
     unsafe { persist_file.Save(PCWSTR(link_path.as_ptr()), true)? };
     Ok(())

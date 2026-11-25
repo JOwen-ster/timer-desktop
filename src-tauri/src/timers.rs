@@ -567,7 +567,9 @@ impl Engine {
         if data.stopping {
             return Ok(());
         }
-        if !data.load_failed && let Err(error) = self.save(&mut data) {
+        if !data.load_failed
+            && let Err(error) = self.save(&mut data)
+        {
             self.publish(&mut data);
             return Err(error);
         }
